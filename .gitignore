@@ -160,4 +160,9 @@ ENV/
 env.bak/
 venv.bak/
 .pytest_cache/
-*.db
+*.db
+
+# GCP Service Account Keys
+key.json
+*key*.json
+
