@@ -64,37 +64,41 @@ sequenceDiagram
 
 ## 4. 구축 단계별 절차
 
-### 1단계: GCP 사전 설정 (서비스 계정 & 권한 부여)
+### 1단계: GCP 사전 설정 (API 활성화, 서비스 계정 & 권한 부여)
 
-Artifact Registry에 이미지를 올리고, Cloud Run에 컨테이너를 배포하기 위해 서비스 계정에 필요한 역할(Role)을 부여합니다.
+Artifact Registry에 이미지를 올리고, Cloud Run에 컨테이너를 배포하기 위해 필요한 GCP API를 켜고 서비스 계정에 역할(Role)을 부여합니다.
 
 ```bash
 # 1. 환경 변수 설정
 export PROJECT_ID="ssu-agent-vertex-509708"
 export SA_NAME="github-actions-sa"
 
-# 2. 서비스 계정 생성 (이미 생성한 경우 생략 가능)
+# 2. 필수 GCP API 활성화 (Cloud Run 및 Artifact Registry)
+# * API가 비활성화되어 있으면 권한이 있어도 PERMISSION_DENIED 에러가 발생합니다.
+gcloud services enable run.googleapis.com artifactregistry.googleapis.com --project=$PROJECT_ID
+
+# 3. 서비스 계정 생성 (이미 생성한 경우 생략 가능)
 gcloud iam service-accounts create $SA_NAME \
     --project=$PROJECT_ID \
     --description="Service Account for GitHub Actions CI/CD" \
     --display-name="GitHub Actions SA"
 
-# 3. Artifact Registry 작성자(Writer) 권한 부여
+# 4. Artifact Registry 작성자(Writer) 권한 부여
 gcloud projects add-iam-policy-binding $PROJECT_ID \
     --member="serviceAccount:${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
     --role="roles/artifactregistry.writer"
 
-# 4. Cloud Run 관리자 권한 부여 (Cloud Run 서비스 배포용)
+# 5. Cloud Run 관리자 권한 부여 (Cloud Run 서비스 생성, 조회, 배포용)
 gcloud projects add-iam-policy-binding $PROJECT_ID \
     --member="serviceAccount:${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
     --role="roles/run.admin"
 
-# 5. 서비스 계정 사용자(Service Account User) 권한 부여 (Cloud Run 실행 계정 위임용)
+# 6. 서비스 계정 사용자(Service Account User) 권한 부여 (Cloud Run 실행 계정 위임용)
 gcloud projects add-iam-policy-binding $PROJECT_ID \
     --member="serviceAccount:${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com" \
     --role="roles/iam.serviceAccountUser"
 
-# 6. JSON 서비스 계정 키 파일 생성 (key.json) - 아직 발급받지 않은 경우에만 실행
+# 7. JSON 서비스 계정 키 파일 생성 (key.json) - 아직 발급받지 않은 경우에만 실행
 gcloud iam service-accounts keys create key.json \
     --iam-account="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 ```
@@ -275,9 +279,20 @@ jobs:
 
 ## 5. 트러블슈팅 가이드
 
-- **`Permission denied on 'locations/asia-northeast3/services/todo-backend'` 에러**:
-  - 서비스 계정에 `roles/run.admin` 권한이 부여되었는지 확인합니다.
+- **`PERMISSION_DENIED: Permission 'run.services.get' denied on resource 'namespaces/ssu-agent-vertex-509708/services/todo-backend'` 에러**:
+  - **원인 1 (가장 흔함)**: GCP 프로젝트에서 Cloud Run API가 비활성화되어 있는 경우입니다.
+    - **해결**: `gcloud services enable run.googleapis.com --project=ssu-agent-vertex-509708` 실행
+  - **원인 2**: 서비스 계정에 Cloud Run 관리자 권한(`roles/run.admin`)이 아직 부여되지 않은 경우입니다.
+    - **해결**: `gcloud projects add-iam-policy-binding ssu-agent-vertex-509708 --member="serviceAccount:github-actions-sa@ssu-agent-vertex-509708.iam.gserviceaccount.com" --role="roles/run.admin"` 실행
+  - **원인 3**: 방금 권한을 부여했으나 GCP IAM 서버 간 동기화(권한 전파)에 1~2분이 걸리는 경우입니다.
+    - **해결**: 1~2분 대기 후 GitHub 저장소 **Actions** 탭에서 실패한 워크플로우를 열고 **Re-run jobs** 버튼을 클릭하여 재시도합니다. (코드 다시 push 불필요)
+
 - **`The user does not have permission to act as 'serviceAccount:...'` 에러**:
   - 서비스 계정에 `roles/iam.serviceAccountUser` 권한이 부여되었는지 확인합니다.
+  - **해결**: `gcloud projects add-iam-policy-binding ssu-agent-vertex-509708 --member="serviceAccount:github-actions-sa@ssu-agent-vertex-509708.iam.gserviceaccount.com" --role="roles/iam.serviceAccountUser"` 실행
+
+- **`denied: Permission "artifactregistry.repositories.uploadArtifacts" denied` 에러**:
+  - 서비스 계정에 `roles/artifactregistry.writer` 역할이 올바른 프로젝트/저장소에 부여되었는지 확인합니다.
+
 - **포트 응답 실패 에러 (Container failed to start)**:
   - Dockerfile의 FastAPI 실행 포트가 `3000`번이므로 워크플로우 `flags`에 `--port=3000`이 지정되어 있어야 합니다.
