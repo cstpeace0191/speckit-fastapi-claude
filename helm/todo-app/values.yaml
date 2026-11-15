@@ -1,0 +1,114 @@
+###################################################
+# Default values for the todo-app chart (GKE).
+#
+# Mirrors compose-prod.yaml:
+#   proxy   (Traefik)  -> GKE Ingress (external HTTP(S) load balancer)
+#   backend (FastAPI)  -> Deployment + ClusterIP Service
+#   mysql   (MySQL)    -> StatefulSet + PersistentVolumeClaim (or external DB)
+#
+# Passwords are NOT stored here. Provide them with --set, a private values
+# file, or an existing Kubernetes Secret (see secrets.* below).
+###################################################
+
+nameOverride: ""
+fullnameOverride: ""
+
+###################################################
+# Backend (FastAPI + bundled React frontend, port 3000)
+###################################################
+backend:
+  replicaCount: 2
+
+  image:
+    repository: asia-northeast3-docker.pkg.dev/ssu-agent-vertex-509708/suntaechung-repo/todo-backend
+    tag: prod
+    pullPolicy: IfNotPresent
+
+  containerPort: 3000
+
+  service:
+    # LoadBalancer: GCP creates an external network load balancer with a public IP.
+    # Use ClusterIP for internal-only access.
+    type: LoadBalancer
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+###################################################
+# Database
+#
+# mysql.enabled=true  : run MySQL in the cluster (same as compose-prod.yaml).
+# mysql.enabled=false : use an external MySQL host instead, set externalDatabase.host.
+#                       (for example a Cloud SQL instance reached through a proxy).
+###################################################
+mysql:
+  enabled: true
+
+  image:
+    repository: mysql
+    tag: "9.3"
+    pullPolicy: IfNotPresent
+
+  persistence:
+    enabled: true
+    size: 10Gi
+    # Empty = the cluster default StorageClass (standard-rwo on GKE).
+    storageClassName: ""
+
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+externalDatabase:
+  # Used only when mysql.enabled=false.
+  host: ""
+
+database:
+  # Database name (compose: MYSQL_DATABASE) and the application user (compose: MYSQL_APP_USER).
+  # The application connects as this user, not as root.
+  name: todos
+  appUser: todo_app
+
+###################################################
+# Secrets
+#
+# Either:
+#   1. Set secrets.existingSecret to a Secret that already exists in the namespace, with keys
+#      MYSQL_ROOT_PASSWORD and MYSQL_APP_PASSWORD (recommended for production), or
+#   2. Leave existingSecret empty and pass the passwords at install time:
+#        --set secrets.mysqlRootPassword=... --set secrets.mysqlAppPassword=...
+###################################################
+secrets:
+  existingSecret: ""
+  mysqlRootPassword: ""
+  mysqlAppPassword: ""
+
+###################################################
+# Ingress (replaces the Traefik proxy from compose-prod.yaml)
+#
+# Uses the GKE Ingress controller (ingressClassName "gce"), which provisions a
+# Google Cloud external HTTP(S) load balancer.
+###################################################
+ingress:
+  enabled: true
+  className: gce
+  # Public hostname. Empty = match any host (use the load balancer IP).
+  host: ""
+  # Name of a reserved global static IP address (gcloud compute addresses create ...).
+  staticIpName: ""
+  # Google-managed TLS certificate (requires host/domains and DNS pointing at the IP).
+  managedCertificate:
+    enabled: false
+    domains: []
+  annotations: {}

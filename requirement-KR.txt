@@ -1,0 +1,307 @@
+==========================================================================
+ getting-started-todo-app-FastAPI  요구사항 및 프로젝트 구조 정리 (KR)
+ 작성일: 2026-11-13   최종 수정: 2026-11-14 (현재 상태 반영, GKE Helm 차트 추가)
+==========================================================================
+
+1. 프로젝트 개요
+--------------------------------------------------------------------------
+- Docker 공식 샘플 "getting-started-todo-app"을 기반으로, 원래 Node.js(Express)
+  백엔드를 Python FastAPI + Uvicorn(비동기) 백엔드로 변환한 Todo 리스트 웹 앱.
+- 프론트엔드: React 19 + Vite 6 + React-Bootstrap (SPA)
+- 백엔드:     FastAPI (Python 3.12), REST API 제공 + 빌드된 SPA 정적 파일 서빙
+- 데이터베이스: SQLite(기본, 로컬) 또는 MySQL 9.3(환경변수 지정 시, Docker Compose 개발/운영환경, GKE)
+- 실행 환경: Docker Compose 개발 (Traefik 리버스 프록시 + backend + client + MySQL + phpMyAdmin)
+             Docker Compose 운영 (compose-prod.yaml: Traefik + 단일 backend 이미지 + MySQL)
+             GKE 운영 (Helm 차트 helm/todo-app: Ingress/LoadBalancer + backend + MySQL StatefulSet)
+             또는 Windows 로컬 직접 실행
+- 프로젝트 관리: Spec Kit 방식. 기능 명세(specs/001-todo-list-app/)와 헌법(.specify/)을
+  이 저장소에 두고, 앱 코드도 같은 저장소 루트에 둔다.
+
+
+2. 디렉터리 구조 (현재)
+--------------------------------------------------------------------------
+Speckit-FastAPI-Claude/                  # Spec Kit 저장소 (루트)
+├── Dockerfile                  # 멀티 스테이지 빌드 (client-base, client-dev, client-build,
+│                               #   backend-base, backend-dev, test, final)
+├── compose.yaml                # 개발용 Compose 스택 (proxy, backend, client, mysql, phpmyadmin)
+├── .dockerignore               # node_modules 등 제외
+├── .gitignore / .npmrc         # backend/.venv, client/dist, backend/src/static 등 무시
+├── compose-prod.yaml           # 운영 Compose 스택 (proxy(Traefik), backend, mysql)
+├── .env.example                # 운영 Compose용 환경변수 예시 (.env로 복사해 사용, git 무시)
+├── helm/todo-app/              # GKE 배포용 Helm 차트 (README.md 참고)
+├── requirement-KR.txt          # 이 문서
+├── constitution-KR.txt         # 헌법 작성 요청 원문
+├── .specify/                   # Spec Kit 설정, 템플릿, 헌법(memory/constitution.md)
+├── specs/001-todo-list-app/    # 기능 명세·계획·작업 목록 (아래 참고)
+│
+├── backend/                    # FastAPI 백엔드
+│   ├── main.py                 # 로컬 실행 진입점 (uvicorn, PORT/HOST 환경변수, reload)
+│   ├── requirements.txt        # Python 의존성 (aiomysql 포함)
+│   ├── pytest.ini              # 테스트 설정 (testpaths=spec, asyncio_mode=auto)
+│   ├── README.md
+│   ├── src/
+│   │   ├── main.py             # FastAPI 앱, lifespan(DB init/teardown), CORS, 라우터, 정적파일 마운트
+│   │   ├── models.py           # Pydantic 모델 (Item, ItemCreate, ItemUpdate, GreetingResponse)
+│   │   │                       #   ItemName: 공백 제거 후 1~255자 (추가·이름 변경에 공통 적용)
+│   │   ├── routes/
+│   │   │   ├── greeting.py     # GET /api/greeting
+│   │   │   └── items.py        # Todo CRUD API
+│   │   ├── persistence/
+│   │   │   ├── __init__.py     # MYSQL_HOST(_FILE) 유무로 sqlite / mysql 백엔드 자동 선택
+│   │   │   ├── sqlite.py       # aiosqlite 구현, created_seq 컬럼 자동 마이그레이션
+│   │   │   └── mysql.py        # aiomysql 커넥션 풀 구현 (재시도 로직, created_seq 마이그레이션)
+│   │   └── static/             # 빌드된 React 결과물 (git 무시 대상, 빌드 시 생성)
+│   ├── spec/                   # pytest 테스트 (42개)
+│   │   ├── persistence/        # SQLite 테스트, SQLite/MySQL 마이그레이션 테스트,
+│   │   │                       #   MySQL 정렬 테스트, fake_mysql.py (가짜 커넥션 풀)
+│   │   ├── routes/             # test_addItem, test_deleteItem, test_getGreeting,
+│   │   │                       #   test_getItems, test_updateItem
+│   │   └── test_name_rules.py  # 이름 규칙 단위 테스트
+│   └── .venv/                  # 로컬 가상환경 (git 무시 대상)
+│
+└── client/                     # React 프론트엔드
+    ├── index.html
+    ├── package.json / package-lock.json   # prop-types 명시됨
+    ├── vite.config.js          # 개발 서버 /api → http://127.0.0.1:3000 프록시
+    ├── copy-build.js           # 빌드 후 dist → ../backend/src/static 복사 (기존 파일 삭제 후 복사)
+    ├── .eslintrc.cjs           # ESLint 설정 (copy-build.js는 Node 환경)
+    ├── dist/                   # 빌드 결과물 (git 무시 대상)
+    └── src/
+        ├── main.jsx            # React 진입점
+        ├── App.jsx             # 레이아웃 (Greeting + TodoListCard)
+        ├── index.scss
+        └── components/
+            ├── Greeting.jsx        # GET /api/greeting 결과 표시
+            ├── TodoListCard.jsx    # 목록 조회, 로드 실패 상태, 작업 결과 메시지
+            ├── AddNewItemForm.jsx  # 새 항목 추가 (POST), 실패 시 입력 유지
+            ├── ItemDisplay.jsx     # 완료 토글(PUT), 이름 변경 버튼, 삭제(DELETE)
+            ├── RenameItemDialog.jsx# 이름 변경 대화상자 (Modal)
+            ├── StatusMessage.jsx   # 상태 메시지 (aria-live 영역)
+            └── ItemDisplay.scss
+
+specs/001-todo-list-app/
+├── spec.md                     # 기능 명세 (Clarifications 포함)
+├── plan.md                     # 구현 계획
+├── research.md                 # 결정 사항과 대안
+├── data-model.md               # Todo 항목과 마이그레이션
+├── contracts/items-api.md      # HTTP API 계약
+├── quickstart.md               # 실행과 수동 검증 절차 (항목 1~24)
+├── tasks.md                    # 작업 목록 (Phase 1~10)
+└── checklists/                 # 요구사항 품질 체크리스트 2종
+
+
+3. 기능 요구사항 (Functional Requirements)
+--------------------------------------------------------------------------
+FR-001  인사말 표시: 화면 상단에 서버에서 받은 인사말("Hello world!")을 표시한다.
+FR-002  할 일 목록 조회: 저장된 모든 항목을 추가된 순서(오래된 것부터)로 표시한다.
+        완료/미완료 전환은 항목의 위치를 바꾸지 않는다.
+        항목이 없으면 "No items yet! Add one above!"를 표시한다.
+        목록 로드에 실패하면 빈 목록 문구 대신 오류와 "Try again" 버튼을 표시한다.
+FR-003  할 일 추가: 이름을 입력하여 새 항목을 추가한다.
+        - 공백을 제외한 이름이 1자 이상이어야 한다. 공백만 있는 이름은 비어 있는 것으로 본다.
+        - 이름 길이 255자 초과는 서버가 422로 거부하고, "Names must be 255 characters or fewer."를 표시한다.
+        - 추가에 실패하면 입력한 이름을 입력창에 남기고 메시지를 표시한다.
+        - 추가에 성공하면 입력창을 비운다.
+        - ID는 서버에서 UUID v4로 생성, completed 기본값 false. 응답에 순서 정보는 없다.
+FR-004  완료 상태 토글: 체크박스 아이콘 클릭으로 completed 값을 반전한다.
+        이름은 보내지 않는다(이름 변경과 충돌하지 않도록).
+FR-005  할 일 수정: name/completed 중 전달된 필드만 부분 수정한다.
+        존재하지 않는 ID이면 404 "Item not found"를 반환한다.
+FR-006  할 일 삭제: 휴지통 아이콘 클릭으로 항목을 삭제한다.
+        존재하지 않는 ID를 삭제하려 하면 404 "Item not found"를 반환하고, 사용자에게 알린다.
+FR-007  데이터 영속성: 서버/컨테이너 재시작 후에도 데이터와 순서, 완료 상태가 유지된다
+        (SQLite 파일, Compose MySQL 볼륨 todo-mysql-data, GKE MySQL StatefulSet의 PVC).
+FR-008  이름 변경: 항목의 편집 버튼으로 대화상자를 열어 이름을 바꾼다.
+        - 이름 텍스트를 클릭해도 대화상자는 열리지 않는다.
+        - 저장 전 입력값은 공백을 제거한 뒤 검사한다. 빈 이름이나 255자 초과 이름이면 저장을 막는다.
+        - 취소하면 항목은 바뀌지 않는다. 이름을 바꿔도 위치와 완료 상태는 유지된다.
+FR-009  동기화 알림: 다른 탭이나 사용자가 이미 삭제한 항목을 바꾸거나 지우려 하면
+        "This item no longer exists" 안내를 보여 주고 목록을 다시 불러온다.
+FR-010  접근성 기준 (헌법 III): 모든 조작은 키보드로 할 수 있어야 하고, 아이콘 버튼은
+        동작과 항목 이름을 포함한 접근 가능한 이름을 가져야 한다.
+
+
+4. REST API 명세
+--------------------------------------------------------------------------
+ (모든 엔드포인트는 /api 접두사 버전과, 스키마에 숨겨진 접두사 없는 별칭을 함께 제공)
+
+ 메서드  경로                    요청 본문                          응답
+ ------  ----------------------  ---------------------------------  -----------------------------
+ GET     /api/greeting           -                                  200 {"greeting": "Hello world!"}
+ GET     /api/items              -                                  200 [Item, ...] (추가 순서)
+ POST    /api/items              {"name": str}                      200 Item / 422 검증 실패
+                                 (공백 제거 후 1~255자)
+ PUT     /api/items/{item_id}    {"name"?: str, "completed"?: bool} 200 Item / 404 없음 / 422 검증 실패
+ DELETE  /api/items/{item_id}    -                                  200 (본문 없음) / 404 없음
+ GET     /docs                   FastAPI 자동 생성 Swagger UI
+ GET     /  (그 외 경로)         backend/src/static 의 React SPA (디렉터리 존재 시)
+
+ Item 모델: { "id": str(UUID), "name": str, "completed": bool }
+ (created_seq는 저장 전용이며 응답에 포함하지 않는다.)
+
+
+5. 데이터 저장소 요구사항
+--------------------------------------------------------------------------
+- 테이블: todo_items (id VARCHAR(36), name VARCHAR(255), completed BOOLEAN, created_seq)
+  - created_seq: 추가 순서를 정하는 정수. 새 항목은 최댓값 + 1을 받는다.
+  - 앱 시작 시 CREATE TABLE IF NOT EXISTS 로 자동 생성하고, created_seq가 없으면 추가한다.
+    - SQLite: 기존 행은 rowid 값으로 채운다.
+    - MySQL: BIGINT AUTO_INCREMENT UNIQUE 컬럼을 추가한다.
+      MySQL은 키가 없는 테이블에서 이 컬럼을 PRIMARY KEY로 만든다(확인됨).
+  - 두 번째 시작에서도 값은 바뀌지 않는다.
+- 저장소 선택 규칙:
+  - MYSQL_HOST 또는 MYSQL_HOST_FILE 환경변수가 있으면 MySQL, 없으면 SQLite.
+- SQLite
+  - 경로: SQLITE_DB_LOCATION (기본 /etc/todos/todo.db, 상위 폴더 자동 생성)
+  - Windows 로컬 실행 시 기본 경로 대신 SQLITE_DB_LOCATION 지정 권장.
+- MySQL
+  - 접속 정보: MYSQL_HOST / MYSQL_USER / MYSQL_PASSWORD / MYSQL_DB
+    (각각 *_FILE 변수로 Docker secret 파일 경로 지정 가능)
+  - 기본값: localhost / root / "" / todos, 포트 3306 고정, utf8mb4
+  - 커넥션 풀 min 1 / max 5, autocommit
+  - DB 준비 대기: 1초 간격 최대 30회 재시도
+
+
+6. 비기능 요구사항 (Non-Functional Requirements)
+--------------------------------------------------------------------------
+NFR-01 비동기 처리: FastAPI + aiosqlite/aiomysql 로 모든 DB I/O를 async 처리.
+NFR-02 CORS: 개발 편의를 위해 모든 Origin/메서드/헤더 허용 (운영 시 제한 필요, 아직 미정).
+NFR-03 Windows 호환: Windows 레지스트리의 잘못된 MIME 타입 문제를 막기 위해
+       .js/.mjs/.css/.svg/.json/.ico MIME 타입을 코드에서 강제 등록.
+NFR-04 테스트: pytest + pytest-asyncio + httpx(ASGITransport)로 라우트/영속성 테스트.
+       MySQL 테스트는 실제 서버 없이 가짜 커넥션 풀로 수행한다(헌법 II).
+       Docker 'test' 스테이지에서 테스트가 통과해야 'final' 이미지가 빌드됨.
+NFR-05 개발 생산성: Compose Watch로 소스 변경 시 컨테이너에 자동 동기화,
+       uvicorn --reload / Vite HMR로 자동 재시작.
+NFR-06 단일 배포: final 이미지는 React 빌드 결과를 FastAPI가 직접 서빙(포트 3000)하는
+       단일 컨테이너로 구성.
+NFR-07 성능: 항목 100개 목록이 페이지를 연 뒤 2초 이내에 모두 표시되어야 한다 (SC-006).
+       서버 측 측정값(SQLite, 100개 목록 조회)은 중앙값 약 1.6 ms였다.
+       브라우저 표시 시간은 아직 측정하지 않았다.
+
+
+7. 소프트웨어 / 의존성 요구사항
+--------------------------------------------------------------------------
+[공통 도구]
+- Docker Desktop (Docker Compose v2, Compose Watch 지원 버전)
+- Git
+
+[백엔드] Python 3.12 (Docker 이미지 python:3.12-slim)
+  (로컬 검증은 Python 3.11에서 수행)
+- fastapi>=0.110.0, uvicorn[standard]>=0.28.0, pydantic>=2.0.0
+- aiosqlite>=0.20.0, aiomysql>=0.2.0, cryptography>=42.0.0 (MySQL 8+ 인증용)
+- python-dotenv>=1.0.0
+- 테스트: pytest>=8.0.0, pytest-asyncio>=0.23.0, httpx>=0.27.0
+
+[프론트엔드] Node.js 22 (Docker 이미지 node:22-alpine)
+- react ^19.1.0, react-dom ^19.1.0, react-bootstrap ^2.10.10, bootstrap ^5.3.6, sass ^1.70.0
+- prop-types ^15.8.1 (명시적으로 선언됨)
+- @fortawesome/* (아이콘)
+- 개발: vite ^6.3.5, @vitejs/plugin-react ^4.5.1, eslint ^8.55.0, prettier ^3.2.4
+
+[Compose 서비스 이미지]
+- traefik:v3.6, mysql:9.3, phpmyadmin
+
+[GKE 배포 도구]
+- gcloud CLI (Google Cloud SDK), kubectl (GKE 클러스터 접속)
+- Helm v3 (차트 설치·업그레이드)
+- 백엔드 이미지: Artifact Registry (asia-northeast3-docker.pkg.dev/.../todo-backend:prod)
+
+
+8. 실행 환경 구성
+--------------------------------------------------------------------------
+8-1. Docker Compose 개발 환경 (권장)
+   docker compose watch      (또는 docker compose up --build)
+   - http://localhost          → client (Vite, 5173)
+   - http://localhost/api/*    → backend (FastAPI, 3000)
+   - http://db.localhost       → phpMyAdmin
+   - Traefik이 80 포트에서 Host/PathPrefix 라벨 규칙으로 라우팅.
+   - backend는 mysql 헬스체크(mysqladmin ping) 통과 후 시작.
+
+8-2. 운영(단일) 이미지
+   docker build -t todo-app .            (target 기본값 = final)
+   docker run -p 3000:3000 todo-app      → http://localhost:3000
+   - 이 경우 MySQL 환경변수가 없으므로 SQLite 사용.
+
+8-3. Windows 로컬 직접 실행
+   (백엔드)  cd backend
+             python -m venv .venv  →  .venv\Scripts\activate
+             pip install -r requirements.txt
+             python main.py                   → http://localhost:3000
+   (프론트)  cd client
+             npm install
+             npm run dev                      → http://localhost:5173 (/api 는 3000으로 프록시)
+             npm run build                    → dist 생성 후 backend/src/static 으로 복사
+                                                (복사 전에 기존 static 폴더 내용을 지운다)
+   (테스트)  cd backend  →  pytest
+   (lint)    cd client   →  npm run lint
+             참고: 드라이브 루트(d:\)에 eslint.config.js가 있으면 ESLint 8이 flat 모드로 전환되어
+             lint가 실패한다. 그 파일을 지우거나 ESLINT_USE_FLAT_CONFIG=false 로 실행한다.
+
+8-4. 운영 Compose (compose-prod.yaml)
+   cp .env.example .env   # 비밀번호 값 입력 (.env는 git 무시)
+   docker compose -f compose-prod.yaml up -d --build
+   - Traefik이 80 포트만 공개한다. backend 는 traefik.enable=true 라벨이 붙은 서비스만 노출한다.
+   - 백엔드는 MySQL 전용 사용자(MYSQL_APP_USER)로 접속한다(root 아님).
+   - MySQL 포트는 호스트에 공개하지 않는다.
+
+8-5. GKE 배포 (Helm 차트 helm/todo-app)
+   helm upgrade --install <release> ./helm/todo-app -n todo --create-namespace \
+     --set secrets.mysqlRootPassword=<...> --set secrets.mysqlAppPassword=<...>
+   - 구성: backend Deployment(포트 3000, 기본 레플리카 2) + backend Service
+     (backend.service.type 기본값 LoadBalancer, ClusterIP로 변경 가능)
+     + mysql StatefulSet(mysql:9.3, PVC 10Gi) + Secret + Ingress(ingressClassName gce, 선택).
+   - compose-prod.yaml 대응: Traefik → GKE Ingress/LoadBalancer, depends_on(healthy) → wait-for-mysql init container.
+   - 백엔드 DB 연결은 앱의 재시도 로직(최대 30초)과 init container가 함께 보장한다.
+   - 비밀번호는 차트에 저장하지 않는다. --set 또는 secrets.existingSecret 로만 전달한다.
+   - 설치·고정 IP·관리형 인증서·제거 절차: helm/todo-app/README.md
+   - 주의: LoadBalancer 타입은 외부 공인 IP와 비용이 생긴다. Ingress와 함께 쓰면 진입점이 둘이 된다.
+
+
+9. Docker 멀티 스테이지 빌드 구성
+--------------------------------------------------------------------------
+ client-base   : node:22-alpine, npm install, 소스 복사
+ client-dev    : Vite 개발 서버 (5173)
+ client-build  : npm run build → dist 생성 (copy-build.js 포함)
+ backend-base  : python:3.12-slim, requirements 설치
+ backend-dev   : 소스/테스트 복사, uvicorn --reload (3000)
+ test          : pytest 실행 (실패 시 빌드 중단)            ← 검증됨 (42 passed)
+ final         : 백엔드 + client dist를 src/static 에 복사, uvicorn (3000)  ← 검증됨 (API 스모크 테스트)
+
+
+10. 검증 현황 및 남은 작업
+--------------------------------------------------------------------------
+[완료]
+- 백엔드 pytest 42개 통과 (로컬, Docker test 스테이지)
+- 클라이언트 build 통과, lint 통과 (legacy 모드)
+- Docker final 이미지: SPA 제공(200), 인사말, 추가/이름 변경/토글/삭제 API,
+  422·404 응답, 재시작 후 순서·완료 상태 유지 (SQLite)
+- Compose MySQL: 추가·완료 처리 후 backend 재시작해도 목록·순서 동일
+- 이전 확인 필요 사항 해결: prop-types 명시, ItemDisplay className 수정, 삭제 404 처리
+- GKE Helm 차트 작성 (helm/todo-app): helm lint 통과, helm template 렌더링 확인
+- GKE 클러스터(suntaechung-k8s-cluster, todo 네임스페이스)에 릴리스 설치
+  (my-helm-getting-started-todo-app). MySQL 파드 Running, backend 파드 2개 Running 확인
+- 배포 중 발견·수정: wait-for-mysql init container가 백엔드 이미지의 python을 찾지 못해 실패
+  → MySQL 이미지의 mysqladmin ping으로 변경
+- backend Service 타입: values의 backend.service.type 으로 지정 (기본 LoadBalancer)
+
+[남은 작업 (tasks.md 참고)]
+- 브라우저 수동 검증: quickstart 항목 1~5, 9~13, 16~18, 20~23 (T040, T042)
+- 브라우저 표시 시간 측정: 100개 목록 2초 이내 (T041)
+- 헌법 위반 수정: client Prettier 미적용 파일 3개(T046), public 함수 반환 타입 주석(T047),
+  SQLite 테스트 공유 경로 → 테스트별 임시 경로(T048)
+- 스펙 보강: 이름 변경 후 재시작 테스트(T049), 100개 서버 응답 자동 테스트(T050),
+  토글 즉시 반영(T051), 성공 시 aria-live 안내(T052)
+- 지연 시간 예산: 헌법 TODO(PERF_BUDGET) 확정 필요
+- GKE 배포 검증: LoadBalancer 외부 IP 할당 확인 및 브라우저에서 앱 동작 확인 (미완료)
+- GKE 운영 점검: 백업 절차, 레플리카/HA 정책, 인증 필요 여부 결정 (미정)
+
+[알려진 제약]
+- 헌법 II(2.0.0): 백엔드 버그 수정에만 회귀 테스트를 요구한다. 클라이언트 버그 수정은
+  quickstart.md의 수동 검증으로 대신한다.
+- MySQL에서 created_seq가 PRIMARY KEY가 되는 것은 계획과 다르다. 기능에는 문제가 없지만
+  스키마 결정이 필요하다.
+- GKE 배포 제약: MySQL은 단일 replica(고가용성 없음), DB 백업 미포함, 백엔드 이미지는 root 실행.
+- 백엔드 Service(LoadBalancer)는 공인 IP로 직접 노출된다. 운영 전 접근 제한이나 Ingress 단일화를 결정해야 한다.
+- 원본 폴더 practices/getting-started-todo-app-FastAPI/ 는 남아 있다. 앱 코드는 이 저장소로
+  옮겨졌으므로 원본은 참고용이다. (nginx 설정, 문서 등 일부 파일은 원본에만 있다.)

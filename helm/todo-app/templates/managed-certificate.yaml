@@ -1,0 +1,12 @@
+{{- if and .Values.ingress.enabled .Values.ingress.managedCertificate.enabled }}
+# Google-managed SSL certificate, referenced by the Ingress annotation.
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: {{ printf "%s-cert" (include "todo-app.fullname" .) }}
+  labels:
+    {{- include "todo-app.labels" . | nindent 4 }}
+spec:
+  domains:
+    {{- required "ingress.managedCertificate.domains must be set when managedCertificate.enabled=true" .Values.ingress.managedCertificate.domains | toYaml | nindent 4 }}
+{{- end }}

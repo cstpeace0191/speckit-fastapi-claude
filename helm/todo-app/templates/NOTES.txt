@@ -1,0 +1,31 @@
+todo-app has been deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+Backend pods:  kubectl get deploy {{ include "todo-app.backendName" . }} -n {{ .Release.Namespace }}
+{{- if .Values.mysql.enabled }}
+MySQL pod:     kubectl get statefulset {{ include "todo-app.mysqlName" . }} -n {{ .Release.Namespace }}
+{{- else }}
+MySQL:         external database at {{ .Values.externalDatabase.host }}
+{{- end }}
+
+{{- if .Values.ingress.enabled }}
+
+Public address (the load balancer can take a few minutes to become ready):
+  kubectl get ingress {{ include "todo-app.fullname" . }} -n {{ .Release.Namespace }}
+{{- if .Values.ingress.host }}
+  Open http://{{ .Values.ingress.host }}/
+{{- else }}
+  Open http://<ADDRESS-from-the-command-above>/
+{{- end }}
+{{- if .Values.ingress.managedCertificate.enabled }}
+
+The Google-managed certificate is provisioned only after DNS for
+{{ join ", " .Values.ingress.managedCertificate.domains }} points at the load balancer IP.
+Check its status with:
+  kubectl describe managedcertificate {{ include "todo-app.fullname" . }}-cert -n {{ .Release.Namespace }}
+{{- end }}
+{{- else }}
+
+Ingress is disabled. Reach the app with:
+  kubectl port-forward svc/{{ include "todo-app.backendName" . }} 8080:80 -n {{ .Release.Namespace }}
+  Then open http://localhost:8080/
+{{- end }}

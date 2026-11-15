@@ -1,0 +1,14 @@
+# Patterns to ignore when building the chart package.
+.DS_Store
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+# Local value overrides that may contain secrets; never package them.
+values-secret*.yaml
+*.secret.yaml

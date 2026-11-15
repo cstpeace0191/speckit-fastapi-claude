@@ -1,0 +1,6 @@
+apiVersion: v2
+name: todo-app
+description: Todo app (FastAPI backend serving the bundled React frontend, plus MySQL) for Google Kubernetes Engine.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

@@ -1,0 +1,99 @@
+###################################################
+# Production Compose file for the todo app.
+#
+# The production image (Dockerfile `final` stage) bundles the React build into
+# the FastAPI backend, which serves both the API and the static frontend. So the
+# stack is a single application container plus MySQL, fronted by Traefik.
+#
+# Secrets are NOT stored in this file. Copy `.env.example` to `.env`, fill in the
+# values, and keep `.env` out of version control (it is listed in .gitignore).
+#
+# Run with:  docker compose -f compose-prod.yaml up -d --build
+###################################################
+
+# Separate project name so prod gets its own containers, network and MySQL
+# volume, and does not share data with the dev compose file.
+name: todo-backend-prod
+
+services:
+
+  ###################################################
+  # Service: proxy
+  #
+  # Traefik watches the Docker events and routes requests based on container
+  # labels. Only containers that explicitly opt in (traefik.enable=true) are
+  # exposed. The Docker socket is mounted read-only.
+  #
+  # Port 80 is exposed to the host.
+  ###################################################
+  proxy:
+    image: traefik:v3.6
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+    ports:
+      - 80:80
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
+  ###################################################
+  # Service: backend
+  #
+  # The FastAPI server serving the API and the bundled frontend (port 3000).
+  # Built from the Dockerfile `final` stage, which runs the test stage first.
+  #
+  # Database settings come from .env. The application connects as a dedicated
+  # MySQL user (MYSQL_APP_USER), not as root.
+  #
+  # The Traefik labels route all requests to localhost to this service.
+  ###################################################
+  backend:   
+    image: asia-northeast3-docker.pkg.dev/ssu-agent-vertex-509708/suntaechung-repo/todo-backend:prod
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_USER: ${MYSQL_APP_USER:?set MYSQL_APP_USER in .env}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?set MYSQL_APP_PASSWORD in .env}
+      MYSQL_DB: ${MYSQL_DATABASE:?set MYSQL_DATABASE in .env}
+    depends_on:
+      mysql:
+        condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.backend.rule: Host(`localhost`)
+      traefik.http.services.backend.loadbalancer.server.port: 3000
+    restart: unless-stopped
+
+  ###################################################
+  # Service: mysql
+  #
+  # The database. Data is persisted in the todo-mysql-data volume.
+  #
+  # MYSQL_USER / MYSQL_PASSWORD create the application user with privileges on
+  # MYSQL_DATABASE. The root password is used only for administration.
+  # The port is not published to the host.
+  ###################################################
+  mysql:
+    image: mysql:9.3
+    volumes:
+      - todo-mysql-data:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:?set MYSQL_DATABASE in .env}
+      MYSQL_USER: ${MYSQL_APP_USER:?set MYSQL_APP_USER in .env}
+      MYSQL_PASSWORD: ${MYSQL_APP_PASSWORD:?set MYSQL_APP_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+###################################################
+# Volumes
+#
+# The volume persists MySQL data across container restarts and recreations.
+###################################################
+volumes:
+  todo-mysql-data:
